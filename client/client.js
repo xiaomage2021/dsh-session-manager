@@ -92,6 +92,13 @@ window.__ModuleLoader__.load({
       confirmDeleteTitle: '删除会话',
       confirmDeleteBody: '确定要删除会话「{title}」吗？会话将从当前工作区列表中移除并停止后台活动（会话日志完整保留，可在「会话管理」中随时恢复）。',
       deletedNotice: '会话已删除（已转入归档，可在会话管理随时恢复）。',
+      purge: '彻底删除',
+      batchPurge: '批量彻底删除',
+      confirmPurgeTitle: '彻底删除会话',
+      confirmBatchPurgeTitle: '批量彻底删除会话',
+      confirmPurgeBody: '确定要彻底删除已归档会话「{title}」吗？会话文件将安全移入回收站缓冲并从系统中彻底抹除，不可恢复。',
+      confirmBatchPurgeBody: '确定要彻底删除选中的 {n} 个会话吗？会话文件将安全移入回收站缓冲并从系统中彻底抹除，不可恢复。',
+      purgeDone: '已彻底删除 {n} 个会话。',
       cancel: '取消',
       confirm: '确定',
       working: '处理中…',
@@ -151,6 +158,13 @@ window.__ModuleLoader__.load({
       confirmDeleteTitle: 'Delete session',
       confirmDeleteBody: 'Are you sure you want to delete session “{title}”? It will be removed from the current workspace and stop running activity (log is kept in Archive).',
       deletedNotice: 'Session deleted (archived, can be restored in Session Manager).',
+      purge: 'Purge permanently',
+      batchPurge: 'Purge selected',
+      confirmPurgeTitle: 'Purge session',
+      confirmBatchPurgeTitle: 'Purge selected sessions',
+      confirmPurgeBody: 'Permanently delete archived session “{title}”? Files will be removed to trash buffer and purged completely.',
+      confirmBatchPurgeBody: 'Permanently delete {n} selected sessions? Files will be removed to trash buffer and purged completely.',
+      purgeDone: '{n} session(s) purged.',
       cancel: 'Cancel',
       confirm: 'Confirm',
       working: 'Working…',
@@ -392,6 +406,7 @@ window.__ModuleLoader__.load({
         const [wsFilter, setWsFilter] = react.useState('')
         const [stateFilter, setStateFilter] = react.useState('active')
         const [selected, setSelected] = react.useState(() => new Set())
+        const [purgedIds, setPurgedIds] = react.useState(() => new Set())
         const [modal, setModal] = react.useState(null)
         const [notice, setNotice] = react.useState(null)
         const [busy, setBusy] = react.useState(false)
@@ -405,9 +420,14 @@ window.__ModuleLoader__.load({
 
         const view = react.useMemo(() => buildView(sessionSnap, wsSnap), [sessionSnap, wsSnap])
 
+        const activeRows = react.useMemo(
+          () => view.rows.filter((r) => !purgedIds.has(r.id)),
+          [view.rows, purgedIds],
+        )
+
         const visible = react.useMemo(() => {
           const q = query.trim().toLowerCase()
-          return view.rows.filter((row) => {
+          return activeRows.filter((row) => {
             if (stateFilter === 'active' && row.archived) return false
             if (stateFilter === 'archived' && !row.archived) return false
             if (stateFilter === 'running' && !row.running) return false
@@ -417,7 +437,7 @@ window.__ModuleLoader__.load({
             const hay = `${row.title} ${row.id} ${row.cwd || ''}`.toLowerCase()
             return hay.includes(q)
           })
-        }, [view.rows, query, wsFilter, stateFilter])
+        }, [activeRows, query, wsFilter, stateFilter])
 
         const groups = react.useMemo(() => {
           const map = new Map()
@@ -569,6 +589,56 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /** 彻底删除已归档会话。 */
+        const doPurge = async (rows) => {
+          setBusy(true)
+          try {
+            const sessionIds = rows.map((r) => r.id)
+            const response = await fetch('/dsh-session-manager/purge', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ sessionIds }),
+            })
+            const payload = await response.json().catch(() => ({}))
+            if (!response.ok || payload.ok === false) {
+              throw new Error(payload.error || '彻底删除失败')
+            }
+
+            // 同步工作区内存态：从归档状态中移出
+            for (const r of rows) {
+              try {
+                await wsSvc?.unarchiveSession?.(r.id)
+              } catch {}
+            }
+
+            // 本地即时从可见列表剔除，界面瞬间刷新
+            setPurgedIds((prev) => {
+              const next = new Set(prev)
+              for (const id of sessionIds) next.add(id)
+              return next
+            })
+
+            // 清理勾选
+            setSelected((prev) => {
+              const next = new Set(prev)
+              for (const id of sessionIds) next.delete(id)
+              return next
+            })
+
+            // 触发后台刷新
+            try {
+              sessionsSvc?.refresh?.()
+            } catch {}
+
+            flash(format(t('purgeDone'), { n: sessionIds.length }), 'ok')
+          } catch (err) {
+            flash(format(t('failed'), { msg: String(err?.message || err) }), 'error')
+          } finally {
+            setBusy(false)
+            setModal(null)
+          }
+        }
+
         const selectedRows = visible.filter((row) => selected.has(row.id))
 
         const toggleSelected = (id) => {
@@ -580,7 +650,20 @@ window.__ModuleLoader__.load({
           })
         }
 
-        const stats = view.stats
+        const stats = react.useMemo(
+          () => ({
+            total: activeRows.length,
+            running: activeRows.filter((r) => r.running).length,
+            archived: activeRows.filter((r) => r.archived).length,
+            workspaces: view.workspaces.length,
+            pinned: activeRows.filter((r) => r.pinned).length,
+          }),
+          [activeRows, view.workspaces.length],
+        )
+
+        const isArchivedBatch =
+          stateFilter === 'archived' ||
+          (selectedRows.length > 0 && selectedRows.every((r) => r.archived))
 
         return react.createElement(
           'div',
@@ -659,21 +742,37 @@ window.__ModuleLoader__.load({
                 'div',
                 { className: 'dsm-batch' },
                 react.createElement('span', { className: 'dsm-batchText' }, format(t('selected'), { n: selected.size })),
-                react.createElement(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'dsm-btn dsm-btnDanger',
-                    onClick: () =>
-                      setModal({
-                        kind: 'remove',
-                        rows: selectedRows,
-                        title: t('confirmRemoveTitle'),
-                        body: format(t('confirmBatchRemoveBody'), { n: selectedRows.length }),
-                      }),
-                  },
-                  t('batchRemove'),
-                ),
+                isArchivedBatch
+                  ? react.createElement(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'dsm-btn dsm-btnDanger',
+                        onClick: () =>
+                          setModal({
+                            kind: 'purge',
+                            rows: selectedRows,
+                            title: t('confirmBatchPurgeTitle'),
+                            body: format(t('confirmBatchPurgeBody'), { n: selectedRows.length }),
+                          }),
+                      },
+                      t('batchPurge'),
+                    )
+                  : react.createElement(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'dsm-btn dsm-btnDanger',
+                        onClick: () =>
+                          setModal({
+                            kind: 'remove',
+                            rows: selectedRows,
+                            title: t('confirmRemoveTitle'),
+                            body: format(t('confirmBatchRemoveBody'), { n: selectedRows.length }),
+                          }),
+                      },
+                      t('batchRemove'),
+                    ),
                 react.createElement(
                   'button',
                   {
@@ -821,7 +920,21 @@ window.__ModuleLoader__.load({
                     row.pinned ? t('unpin') : t('pin'),
                   ),
               row.archived
-                ? null
+                ? react.createElement(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dsm-link dsm-linkDanger',
+                      onClick: () =>
+                        setModal({
+                          kind: 'purge',
+                          rows: [row],
+                          title: t('confirmPurgeTitle'),
+                          body: format(t('confirmPurgeBody'), { title: row.title }),
+                        }),
+                    },
+                    t('purge'),
+                  )
                 : react.createElement(
                     'button',
                     {
@@ -870,6 +983,21 @@ window.__ModuleLoader__.load({
               onCancel: () => setModal(null),
               onConfirm: (value) => doRename(m.row, value),
             })
+          }
+          if (m.kind === 'purge') {
+            return react.createElement(
+              Modal,
+              {
+                key: 'purge',
+                title: m.title,
+                confirmText: t('purge'),
+                confirmKind: 'danger',
+                busy,
+                onCancel: () => setModal(null),
+                onConfirm: () => doPurge(m.rows),
+              },
+              react.createElement('p', { className: 'dsm-modalText' }, m.body),
+            )
           }
           if (m.kind === 'remove') {
             return react.createElement(Modal, {
