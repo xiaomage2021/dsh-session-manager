@@ -104,6 +104,7 @@ window.__ModuleLoader__.load({
       confirmPurgeBody: '确定要彻底删除已归档会话「{title}」吗？会话文件将安全移入回收站缓冲并从系统中彻底抹除，不可恢复。',
       confirmBatchPurgeBody: '确定要彻底删除选中的 {n} 个会话吗？会话文件将安全移入回收站缓冲并从系统中彻底抹除，不可恢复。',
       purgeDone: '已彻底删除 {n} 个会话。',
+      skippedRunning: '已跳过 {n} 个正在运行的会话，请先停止后再删除。',
       cancel: '取消',
       confirm: '确定',
       working: '处理中…',
@@ -175,6 +176,7 @@ window.__ModuleLoader__.load({
       confirmPurgeBody: 'Permanently delete archived session “{title}”? Files will be removed to trash buffer and purged completely.',
       confirmBatchPurgeBody: 'Permanently delete {n} selected sessions? Files will be removed to trash buffer and purged completely.',
       purgeDone: '{n} session(s) purged.',
+      skippedRunning: 'Skipped {n} running session(s); stop them first.',
       cancel: 'Cancel',
       confirm: 'Confirm',
       working: 'Working…',
@@ -614,33 +616,44 @@ window.__ModuleLoader__.load({
               throw new Error(payload.error || '彻底删除失败')
             }
 
-            // 同步工作区内存态：从归档状态中移出
-            for (const r of rows) {
+            // 宿主只会真正删除「非运行中」的会话，其余通过 skippedRunning 回报
+            const purged = Array.isArray(payload.purgedSessionIds) && payload.purgedSessionIds.length > 0
+              ? payload.purgedSessionIds
+              : Array.isArray(payload.skippedRunning) && payload.skippedRunning.length > 0
+                ? []
+                : sessionIds
+            const skipped = Array.isArray(payload.skippedRunning) ? payload.skippedRunning : []
+
+            // 同步工作区内存态：从归档集合中移出已删除的会话
+            for (const id of purged) {
               try {
-                await wsSvc?.unarchiveSession?.(r.id)
+                await wsSvc?.unarchiveSession?.(id)
               } catch {}
             }
 
             // 本地即时从可见列表剔除，界面瞬间刷新
-            setPurgedIds((prev) => {
-              const next = new Set(prev)
-              for (const id of sessionIds) next.add(id)
-              return next
-            })
-
-            // 清理勾选
-            setSelected((prev) => {
-              const next = new Set(prev)
-              for (const id of sessionIds) next.delete(id)
-              return next
-            })
+            if (purged.length > 0) {
+              setPurgedIds((prev) => {
+                const next = new Set(prev)
+                for (const id of purged) next.add(id)
+                return next
+              })
+              setSelected((prev) => {
+                const next = new Set(prev)
+                for (const id of purged) next.delete(id)
+                return next
+              })
+            }
 
             // 触发后台刷新
             try {
               sessionsSvc?.refresh?.()
             } catch {}
 
-            flash(format(t('purgeDone'), { n: sessionIds.length }), 'ok')
+            if (purged.length > 0) flash(format(t('purgeDone'), { n: purged.length }), 'ok')
+            if (skipped.length > 0) {
+              setTimeout(() => flash(format(t('skippedRunning'), { n: skipped.length }), 'warn'), purged.length > 0 ? 400 : 0)
+            }
           } catch (err) {
             flash(format(t('failed'), { msg: String(err?.message || err) }), 'error')
           } finally {
