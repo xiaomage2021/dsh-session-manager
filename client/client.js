@@ -94,6 +94,11 @@ window.__ModuleLoader__.load({
       deletedNotice: '会话已删除（已转入归档，可在会话管理随时恢复）。',
       purge: '彻底删除',
       batchPurge: '批量彻底删除',
+      purgeAll: '全部彻底删除',
+      confirmPurgeAllTitle: '全部彻底删除',
+      confirmPurgeAllBody: '确定要彻底删除当前全部 {n} 个已归档会话吗？文件将安全移入回收站缓冲并从系统中彻底抹除，不可恢复。',
+      noArchived: '当前没有已归档会话。',
+      statHint: '点击卡片快速筛选',
       confirmPurgeTitle: '彻底删除会话',
       confirmBatchPurgeTitle: '批量彻底删除会话',
       confirmPurgeBody: '确定要彻底删除已归档会话「{title}」吗？会话文件将安全移入回收站缓冲并从系统中彻底抹除，不可恢复。',
@@ -160,6 +165,11 @@ window.__ModuleLoader__.load({
       deletedNotice: 'Session deleted (archived, can be restored in Session Manager).',
       purge: 'Purge permanently',
       batchPurge: 'Purge selected',
+      purgeAll: 'Purge all archived',
+      confirmPurgeAllTitle: 'Purge all archived',
+      confirmPurgeAllBody: 'Permanently delete all {n} archived sessions? Files go to the trash buffer and are removed from the system.',
+      noArchived: 'No archived sessions right now.',
+      statHint: 'Click a card to filter',
       confirmPurgeTitle: 'Purge session',
       confirmBatchPurgeTitle: 'Purge selected sessions',
       confirmPurgeBody: 'Permanently delete archived session “{title}”? Files will be removed to trash buffer and purged completely.',
@@ -640,6 +650,7 @@ window.__ModuleLoader__.load({
         }
 
         const selectedRows = visible.filter((row) => selected.has(row.id))
+        const archivedRows = activeRows.filter((row) => row.archived)
 
         const toggleSelected = (id) => {
           setSelected((prev) => {
@@ -680,14 +691,14 @@ window.__ModuleLoader__.load({
             ),
           ),
 
-          // 统计卡片
+          // 统计卡片（可点击，一键进入对应视图）
           react.createElement(
             'div',
             { className: 'dsm-stats' },
-            statCard('dsm-statTotal', t('statTotal'), stats.total),
-            statCard('dsm-statRun', t('statRun'), stats.running),
-            statCard('dsm-statArch', t('statArch'), stats.archived),
-            statCard('dsm-statWs', t('statWs'), stats.workspaces),
+            statCard('dsm-statTotal', t('statTotal'), stats.total, 'total', stateFilter === 'all' && wsFilter === ''),
+            statCard('dsm-statRun', t('statRun'), stats.running, 'running', stateFilter === 'running'),
+            statCard('dsm-statArch', t('statArch'), stats.archived, 'archived', stateFilter === 'archived'),
+            statCard('dsm-statWs', t('statWs'), stats.workspaces, 'workspace', stateFilter === 'active' && wsFilter === ''),
           ),
 
           // 工具栏
@@ -734,6 +745,29 @@ window.__ModuleLoader__.load({
               { type: 'button', className: 'dsm-btn', onClick: () => setTick((n) => n + 1) },
               t('refresh'),
             ),
+            // 归档视图专属：一键彻底删除全部已归档会话
+            stateFilter === 'archived'
+              ? react.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsm-btn dsm-btnDanger',
+                    onClick: () => {
+                      if (archivedRows.length === 0) {
+                        flash(t('noArchived'), 'warn')
+                        return
+                      }
+                      setModal({
+                        kind: 'purgeAll',
+                        rows: archivedRows,
+                        title: t('confirmPurgeAllTitle'),
+                        body: format(t('confirmPurgeAllBody'), { n: archivedRows.length }),
+                      })
+                    },
+                  },
+                  t('purgeAll'),
+                )
+              : null,
           ),
 
           // 批量操作条
@@ -835,14 +869,39 @@ window.__ModuleLoader__.load({
           modal !== null ? renderModal() : null,
         )
 
-        /** 统计卡片。 */
-        function statCard(cls, label, value) {
+        /** 统计卡片（可点击进入对应筛选视图）。 */
+        function statCard(cls, label, value, kind, active) {
           return react.createElement(
-            'div',
-            { className: `dsm-stat ${cls}` },
+            'button',
+            {
+              type: 'button',
+              className: `dsm-stat ${cls}${active ? ' dsm-statActive' : ''}`,
+              title: t('statHint'),
+              onClick: () => goStat(kind),
+            },
             react.createElement('div', { className: 'dsm-statValue' }, String(value)),
             react.createElement('div', { className: 'dsm-statLabel' }, label),
           )
+        }
+
+        /** 点击统计卡片时切换到对应视图。 */
+        function goStat(kind) {
+          if (kind === 'total') {
+            setStateFilter('all')
+            setWsFilter('')
+            return
+          }
+          if (kind === 'running') {
+            setStateFilter('running')
+            return
+          }
+          if (kind === 'archived') {
+            setStateFilter('archived')
+            return
+          }
+          // workspace：回到「在用 + 全部工作区」的总览
+          setStateFilter('active')
+          setWsFilter('')
         }
 
         /** 单个会话卡片。 */
@@ -984,13 +1043,13 @@ window.__ModuleLoader__.load({
               onConfirm: (value) => doRename(m.row, value),
             })
           }
-          if (m.kind === 'purge') {
+          if (m.kind === 'purgeAll' || m.kind === 'purge') {
             return react.createElement(
               Modal,
               {
-                key: 'purge',
+                key: m.kind,
                 title: m.title,
-                confirmText: t('purge'),
+                confirmText: m.kind === 'purgeAll' ? t('purgeAll') : t('purge'),
                 confirmKind: 'danger',
                 busy,
                 onCancel: () => setModal(null),
@@ -1116,7 +1175,9 @@ window.__ModuleLoader__.load({
           '.dsm-sub{margin:0;font-size:13px;line-height:1.6;color:var(--dsw-alias-label-tertiary,#888)}',
           '.dsm-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}',
           '@media (max-width:900px){.dsm-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}',
-          '.dsm-stat{border:1px solid var(--dsw-alias-border-l2,#e6e6e6);border-radius:12px;padding:12px 14px;background:var(--dsw-alias-bg-layer-2,#fcfcfc);display:flex;flex-direction:column;gap:4px}',
+          '.dsm-stat{border:1px solid var(--dsw-alias-border-l2,#e6e6e6);border-radius:12px;padding:12px 14px;background:var(--dsw-alias-bg-layer-2,#fcfcfc);display:flex;flex-direction:column;gap:4px;align-items:flex-start;text-align:left;font:inherit;cursor:pointer;transition:border-color .12s ease,box-shadow .12s ease,background .12s ease}',
+          '.dsm-stat:hover{border-color:var(--dsw-alias-brand-primary,#3b82f6);box-shadow:0 2px 10px rgba(0,0,0,.06)}',
+          '.dsm-statActive{border-color:var(--dsw-alias-brand-primary,#3b82f6);background:var(--dsw-alias-bg-layer-3,#eef4ff);box-shadow:inset 0 0 0 1px var(--dsw-alias-brand-primary,#3b82f6)}',
           '.dsm-statValue{font-size:22px;font-weight:700;line-height:1.2;color:var(--dsw-alias-label-primary,#111)}',
           '.dsm-statLabel{font-size:12px;color:var(--dsw-alias-label-tertiary,#888)}',
           '.dsm-statRun .dsm-statValue{color:var(--dsw-alias-state-success-primary,#12864b)}',
