@@ -1,0 +1,9 @@
+# dsh bundle patch: 往 profile 层栈插入本插件的宿主半身。
+#
+# 必须真的 insert 一行：bundles 只负责「把这个包的 patch 文件叠进层栈」，
+# 若 patch 是空数组，本插件就不会产生任何 Loader 行 → 宿主半身不加载 →
+# 浏览器半侧（./client）也不会被 client-modules 暴露到 /plugins 下，
+# 表现为「侧边栏没入口 + 自检路由 404」。
+- insert:
+    - id: dsh-session-manager
+      name: dsh-session-manager

@@ -1,0 +1,24 @@
+{
+  "name": "dsh-session-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "在左侧面板栏「上下文洞察」下方加一个「会话管理」入口：跨全部工作区汇总会话，支持搜索筛选、打开、重命名、置顶、删除（归档）与恢复、批量操作，并可把会话转移到其他工作区。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}
